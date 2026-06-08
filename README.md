@@ -1,4 +1,4 @@
-# emofom
+# Implementation of 'Synthesis of loop-free programs' by Gulwani et al.
 
 A small C++ implementation of **component-based program
 synthesis**: given a behavioural specification and a library of components, it
