@@ -19,7 +19,7 @@
 // Every value flowing through the program is a bitvector of width BV_LENGTH.
 // ---------------------------------------------------------------------------
 
-constexpr unsigned BV_LENGTH = 16;
+constexpr unsigned BV_LENGTH = 32;
 
 // A value travelling on a wire, together with the program line that the wire
 // binds to.
