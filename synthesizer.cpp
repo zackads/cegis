@@ -126,11 +126,13 @@ z3::expr_vector Synthesizer::all_zero_example() const {
     return in;
 }
 
-std::optional<SynthesizedProgram> Synthesizer::solve() {
+std::optional<SynthesizedProgram> Synthesizer::solve(SynthesisObserver* observer) {
     std::vector<z3::expr_vector> examples;
     examples.push_back(all_zero_example());
 
     while (true) {
+        if (observer) observer->on_synthesis_round(examples.size());
+
         // === Finite synthesis (the exists): find a single program that meets the spec on every example gathered so far. ===
         z3::solver finite_synthesis(ctx_);
         finite_synthesis.add(psi_wfp());
@@ -142,9 +144,12 @@ std::optional<SynthesizedProgram> Synthesizer::solve() {
             finite_synthesis.add(psi_conn(inst));
             finite_synthesis.add(phi_spec(inst));
         }
-        if (finite_synthesis.check() != z3::sat)
+        if (finite_synthesis.check() != z3::sat) {
+            if (observer) observer->on_no_program();
             return std::nullopt;
+        }
         z3::model candidate = finite_synthesis.get_model();
+        if (observer) observer->on_candidate(decode(candidate));
 
         // === Verification (the forall): does some input make this candidate violate the spec?  Look for a counterexample. ===
         z3::solver verification(ctx_);
@@ -164,6 +169,12 @@ std::optional<SynthesizedProgram> Synthesizer::solve() {
             z3::expr_vector input(ctx_);
             for (const Port& i : probe.inputs)
                 input.push_back(cex.eval(i.value, true));
+            if (observer) {
+                std::vector<std::string> shown;
+                for (const z3::expr& v : input)
+                    shown.push_back(v.to_string());
+                observer->on_counterexample(shown);
+            }
             examples.push_back(input); // refine and retry
         } else {
             return decode(candidate); // no counterexample: the program is correct
