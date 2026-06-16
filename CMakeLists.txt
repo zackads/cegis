@@ -30,6 +30,7 @@ add_executable(emofom
         synthesizer.cpp
         problems.cpp
         program_printer.cpp
+        observer.cpp
 )
 target_link_libraries(emofom PRIVATE ${Z3_TARGET})
 

@@ -1,8 +1,10 @@
+#include "problems.hpp"
+
 #include <cstdint>
 #include <functional>
+#include <string>
 #include <vector>
-
-#include "problems.hpp"
+#include <z3++.h>
 
 // ---------------------------------------------------------------------------
 // Helpers for building component libraries.

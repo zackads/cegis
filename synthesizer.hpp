@@ -8,25 +8,7 @@
 #include <z3++.h>
 
 #include "model.hpp"
-
-// Receives progress events from a CEGIS solve so a caller can report what the
-// synthesiser is doing live, without the Synthesizer knowing anything about how
-// (or whether) that progress is displayed.  All callbacks are invoked on the
-// thread that called solve(); a parallel driver must make its implementation
-// thread-safe.
-struct SynthesisObserver {
-    virtual ~SynthesisObserver() = default;
-
-    // A finite-synthesis round is beginning against an example set of size S.
-    virtual void on_synthesis_round(std::size_t example_set_size) {}
-    // The finite-synthesis step found a candidate: an assignment to the location
-    // variables L, decoded here into the straight-line program it represents.
-    virtual void on_candidate(const SynthesizedProgram& candidate) {}
-    // Verification refuted the candidate with this input, now added to the set.
-    virtual void on_counterexample(const std::vector<std::string>& input) {}
-    // Finite synthesis was unsatisfiable: no program over the library exists.
-    virtual void on_no_program() {}
-};
+#include "observer.hpp"
 
 // Counterexample-guided inductive synthesis (CEGIS) over the component library:
 // alternately find a candidate program that fits the examples gathered so far,

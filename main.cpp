@@ -3,7 +3,6 @@
 #include <cstdlib>
 #include <functional>
 #include <iostream>
-#include <mutex>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -11,6 +10,7 @@
 #include <vector>
 #include <z3++.h>
 
+#include "observer.hpp"
 #include "problems.hpp"
 #include "program_printer.hpp"
 #include "synthesizer.hpp"
@@ -94,65 +94,6 @@ std::vector<Task> all_tasks() {
         {"P27 SecOr (first-order masked)", sec_or_problem},
     };
 }
-
-// Serialises all console output so lines from concurrent workers never tear.
-class Logger {
-public:
-    void log(const std::string& message) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        std::cout << message << '\n' << std::flush;
-    }
-
-private:
-    std::mutex mutex_;
-};
-
-std::string join(const std::vector<std::string>& parts, const char* sep) {
-    std::string out;
-    for (std::size_t i = 0; i < parts.size(); ++i) {
-        if (i) out += sep;
-        out += parts[i];
-    }
-    return out;
-}
-
-// A candidate program (the location assignment L) on a single line.
-std::string render_L(const SynthesizedProgram& p) {
-    std::string out;
-    for (const SynthesizedProgram::Instruction& ins : p.instructions) {
-        out += ins.result + " = " + ins.component + "(" + join(ins.args, ", ") + "); ";
-    }
-    out += "return " + join(p.return_labels, ", ");
-    return out;
-}
-
-// Reports CEGIS progress for one problem, tagged with its title and the core
-// the worker is pinned to.
-class ConsoleObserver : public SynthesisObserver {
-public:
-    ConsoleObserver(Logger& logger, std::string title, unsigned core)
-        : logger_(logger), title_(std::move(title)), core_(core) {}
-
-    void on_synthesis_round(std::size_t example_set_size) override {
-        log("synthesis round, |S| = " + std::to_string(example_set_size));
-    }
-    void on_candidate(const SynthesizedProgram& candidate) override {
-        log("candidate L: " + render_L(candidate));
-    }
-    void on_counterexample(const std::vector<std::string>& input) override {
-        log("counterexample: x = (" + join(input, ", ") + ")");
-    }
-    void on_no_program() override { log("no program exists over the library"); }
-
-private:
-    void log(const std::string& message) {
-        logger_.log("[core " + std::to_string(core_) + "] " + title_ + ": " + message);
-    }
-
-    Logger& logger_;
-    std::string title_;
-    unsigned core_;
-};
 
 unsigned parse_jobs(int argc, char** argv, unsigned hw, bool& help,
                     std::vector<std::string>& filters) {
