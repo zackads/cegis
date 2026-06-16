@@ -179,12 +179,16 @@ unsigned parse_jobs(int argc, char** argv, unsigned hw, bool& help,
     return std::clamp(jobs, 1u, std::max(1u, hw));
 }
 
-// Keep only the tasks whose title starts with one of the given prefixes.
+// Keep only the tasks whose title starts with one of the given prefixes, where
+// the prefix must end on a word boundary so "P1" matches only the P1 task and
+// not P10–P19.
 std::vector<Task> filter_tasks(std::vector<Task> tasks, const std::vector<std::string>& filters) {
     if (filters.empty()) return tasks;
     std::erase_if(tasks, [&](const Task& t) {
-        return std::ranges::none_of(
-            filters, [&](const std::string& f) { return t.title.rfind(f, 0) == 0; });
+        return std::ranges::none_of(filters, [&](const std::string& f) {
+            return t.title.rfind(f, 0) == 0 &&
+                   (t.title.size() == f.size() || t.title[f.size()] == ' ');
+        });
     });
     return tasks;
 }

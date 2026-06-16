@@ -433,7 +433,7 @@ Problem compute_parity_problem(z3::context&) {
         const expr o6 = (o4 & lit(x, 0x11111111)) * lit(x, 0x11111111);
         return out == (z3::lshr(o6, 28) & lit(x, 0x1));
     };
-    return Problem{1, library, spec};
+    return Problem{1, library, out1(spec)};
 }
 
 // ===========================================================================
