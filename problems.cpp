@@ -29,81 +29,89 @@ expr as_bit(const expr& width_like, const expr& pred) {
     return ite(pred, lit(width_like, 1), lit(width_like, 0));
 }
 
-ComponentSpec un(const char* name, std::function<expr(const expr&)> f) {
-    return ComponentSpec{name, 1, [f = std::move(f)](const expr_vector& in, const expr& r) {
+// Adapt a single-output spec to the multi-output signature of Problem::spec.
+std::function<expr(const expr_vector&, const expr_vector&)>
+out1(std::function<expr(const expr_vector&, const expr&)> f) {
+    return [f = std::move(f)](const expr_vector& in, const expr_vector& out) {
+        return f(in, out[0]);
+    };
+}
+
+BitwiseComponentSpec un(const char* name, std::function<expr(const expr&)> f) {
+    return BitwiseComponentSpec{name, 1, [f = std::move(f)](const expr_vector& in, const expr& r) {
                              return r == f(in[0]);
                          }};
 }
 
-ComponentSpec bin(const char* name, std::function<expr(const expr&, const expr&)> f) {
-    return ComponentSpec{name, 2, [f = std::move(f)](const expr_vector& in, const expr& r) {
+BitwiseComponentSpec bin(const char* name, std::function<expr(const expr&, const expr&)> f) {
+    return BitwiseComponentSpec{name, 2, [f = std::move(f)](const expr_vector& in, const expr& r) {
                              return r == f(in[0], in[1]);
                          }};
 }
 
 // --- Common components -----------------------------------------------------
-ComponentSpec inc() { return un("inc", [](const expr& a) { return a + 1; }); }
-ComponentSpec dec() { return un("dec", [](const expr& a) { return a - 1; }); }
-ComponentSpec neg() { return un("neg", [](const expr& a) { return -a; }); }
-ComponentSpec bnot() { return un("not", [](const expr& a) { return ~a; }); }
+BitwiseComponentSpec inc() { return un("inc", [](const expr& a) { return a + 1; }); }
+BitwiseComponentSpec dec() { return un("dec", [](const expr& a) { return a - 1; }); }
+BitwiseComponentSpec neg() { return un("neg", [](const expr& a) { return -a; }); }
+BitwiseComponentSpec bnot() { return un("not", [](const expr& a) { return ~a; }); }
 
-ComponentSpec and_() { return bin("and", [](const expr& a, const expr& b) { return a & b; }); }
-ComponentSpec or_() { return bin("or", [](const expr& a, const expr& b) { return a | b; }); }
-ComponentSpec xor_() { return bin("xor", [](const expr& a, const expr& b) { return a ^ b; }); }
-ComponentSpec add_() { return bin("add", [](const expr& a, const expr& b) { return a + b; }); }
-ComponentSpec sub_() { return bin("sub", [](const expr& a, const expr& b) { return a - b; }); }
-ComponentSpec mul_() { return bin("mul", [](const expr& a, const expr& b) { return a * b; }); }
-ComponentSpec udiv_() {
+BitwiseComponentSpec and_() { return bin("and", [](const expr& a, const expr& b) { return a & b; }); }
+BitwiseComponentSpec or_() { return bin("or", [](const expr& a, const expr& b) { return a | b; }); }
+BitwiseComponentSpec xor_() { return bin("xor", [](const expr& a, const expr& b) { return a ^ b; }); }
+BitwiseComponentSpec add_() { return bin("add", [](const expr& a, const expr& b) { return a + b; }); }
+BitwiseComponentSpec sub_() { return bin("sub", [](const expr& a, const expr& b) { return a - b; }); }
+BitwiseComponentSpec mul_() { return bin("mul", [](const expr& a, const expr& b) { return a * b; }); }
+BitwiseComponentSpec udiv_() {
     return bin("udiv", [](const expr& a, const expr& b) { return z3::udiv(a, b); });
 }
 
 // Shifts by a compile-time amount, and by a runtime operand (P19).
-ComponentSpec lshr_by(unsigned k) {
-    return ComponentSpec{"shr" + std::to_string(k), 1,
+BitwiseComponentSpec lshr_by(unsigned k) {
+    return BitwiseComponentSpec{"shr" + std::to_string(k), 1,
                          [k](const expr_vector& in, const expr& r) {
                              return r == z3::lshr(in[0], static_cast<int>(k));
                          }};
 }
-ComponentSpec shr_top() { // logical shift right by width-1: isolates the top bit
+BitwiseComponentSpec shr_top() { // logical shift right by width-1: isolates the top bit
     return un("shr", [](const expr& a) { return z3::lshr(a, static_cast<int>(width_of(a)) - 1); });
 }
-ComponentSpec ashr_top() { // arithmetic shift right by width-1: broadcasts the sign bit
+BitwiseComponentSpec ashr_top() { // arithmetic shift right by width-1: broadcasts the sign bit
     return un("ashr", [](const expr& a) { return z3::ashr(a, static_cast<int>(width_of(a)) - 1); });
 }
-ComponentSpec lshr_var() {
+BitwiseComponentSpec lshr_var() {
     return bin("lshr", [](const expr& a, const expr& b) { return z3::lshr(a, b); });
 }
-ComponentSpec shl_var() {
+BitwiseComponentSpec shl_var() {
     return bin("shl", [](const expr& a, const expr& b) { return z3::shl(a, b); });
 }
 
 // And with a folded-in mask.
-ComponentSpec and_mask(const char* name, uint64_t m) {
+BitwiseComponentSpec and_mask(const char* name, uint64_t m) {
     return un(name, [m](const expr& a) { return a & lit(a, m); });
 }
 
 // Multiply by a folded-in constant.
-ComponentSpec mul_const(const char* name, uint64_t c) {
+BitwiseComponentSpec mul_const(const char* name, uint64_t c) {
     return un(name, [c](const expr& a) { return a * lit(a, c); });
 }
 
 // Comparisons and reductions, returning a full-width 0/1.
-ComponentSpec ule_() {
+BitwiseComponentSpec ule_() {
     return bin("ule", [](const expr& a, const expr& b) { return as_bit(a, z3::ule(a, b)); });
 }
-ComponentSpec ugt_() {
+BitwiseComponentSpec ugt_() {
     return bin("ugt", [](const expr& a, const expr& b) { return as_bit(a, z3::ugt(a, b)); });
 }
-ComponentSpec uge_() {
+BitwiseComponentSpec uge_() {
     return bin("uge", [](const expr& a, const expr& b) { return as_bit(a, z3::uge(a, b)); });
 }
-ComponentSpec eq_() {
+BitwiseComponentSpec eq_() {
     return bin("eq", [](const expr& a, const expr& b) { return as_bit(a, a == b); });
 }
-ComponentSpec redor_() {
+BitwiseComponentSpec redor_() {
     return un("redor", [](const expr& a) { return as_bit(a, a != lit(a, 0)); });
 }
-ComponentSpec lnot_() {
+BitwiseComponentSpec lnot_() {
     return un("lnot", [](const expr& a) { return as_bit(a, a == lit(a, 0)); });
 }
 
@@ -119,7 +127,7 @@ Problem turn_off_rightmost_bit_problem(z3::context&) {
         const expr& x = in[0];
         return out == (x & (x - 1));
     };
-    return Problem{1, library, spec};
+    return Problem{1, library, out1(spec)};
 }
 
 // ===========================================================================
@@ -132,7 +140,7 @@ Problem test_power_of_two_minus_one_problem(z3::context&) {
         const expr& x = in[0];
         return out == (x & (x + 1));
     };
-    return Problem{1, library, spec};
+    return Problem{1, library, out1(spec)};
 }
 
 // ===========================================================================
@@ -145,7 +153,7 @@ Problem isolate_rightmost_one_bit_problem(z3::context&) {
         const expr& x = in[0];
         return out == (x & (-x));
     };
-    return Problem{1, library, spec};
+    return Problem{1, library, out1(spec)};
 }
 
 // ===========================================================================
@@ -158,7 +166,7 @@ Problem mask_rightmost_one_and_trailing_zeros_problem(z3::context&) {
         const expr& x = in[0];
         return out == (x ^ (x - 1));
     };
-    return Problem{1, library, spec};
+    return Problem{1, library, out1(spec)};
 }
 
 // ===========================================================================
@@ -171,7 +179,7 @@ Problem right_propagate_rightmost_one_problem(z3::context&) {
         const expr& x = in[0];
         return out == (x | (x - 1));
     };
-    return Problem{1, library, spec};
+    return Problem{1, library, out1(spec)};
 }
 
 // ===========================================================================
@@ -184,7 +192,7 @@ Problem turn_on_rightmost_zero_bit_problem(z3::context&) {
         const expr& x = in[0];
         return out == (x | (x + 1));
     };
-    return Problem{1, library, spec};
+    return Problem{1, library, out1(spec)};
 }
 
 // ===========================================================================
@@ -197,7 +205,7 @@ Problem isolate_rightmost_zero_bit_problem(z3::context&) {
         const expr& x = in[0];
         return out == (~x & (x + 1));
     };
-    return Problem{1, library, spec};
+    return Problem{1, library, out1(spec)};
 }
 
 // ===========================================================================
@@ -210,7 +218,7 @@ Problem mask_trailing_zeros_problem(z3::context&) {
         const expr& x = in[0];
         return out == ((x - 1) & ~x);
     };
-    return Problem{1, library, spec};
+    return Problem{1, library, out1(spec)};
 }
 
 // ===========================================================================
@@ -224,7 +232,7 @@ Problem absolute_value_problem(z3::context&) {
         const expr s = z3::ashr(x, static_cast<int>(width_of(x)) - 1);
         return out == ((x ^ s) - s);
     };
-    return Problem{1, library, spec};
+    return Problem{1, library, out1(spec)};
 }
 
 // ===========================================================================
@@ -238,7 +246,7 @@ Problem test_equal_leading_zeros_problem(z3::context&) {
         const expr& y = in[1];
         return out == as_bit(x, z3::ule(x ^ y, x & y));
     };
-    return Problem{2, library, spec};
+    return Problem{2, library, out1(spec)};
 }
 
 // ===========================================================================
@@ -252,7 +260,7 @@ Problem test_fewer_leading_zeros_problem(z3::context&) {
         const expr& y = in[1];
         return out == as_bit(x, z3::ugt(x & ~y, y));
     };
-    return Problem{2, library, spec};
+    return Problem{2, library, out1(spec)};
 }
 
 // ===========================================================================
@@ -266,7 +274,7 @@ Problem test_no_more_leading_zeros_problem(z3::context&) {
         const expr& y = in[1];
         return out == as_bit(x, z3::ule(x & ~y, y));
     };
-    return Problem{2, library, spec};
+    return Problem{2, library, out1(spec)};
 }
 
 // ===========================================================================
@@ -280,7 +288,7 @@ Problem sign_function_problem(z3::context&) {
         const int top = static_cast<int>(width_of(x)) - 1;
         return out == (z3::ashr(x, top) | z3::lshr(-x, top));
     };
-    return Problem{1, library, spec};
+    return Problem{1, library, out1(spec)};
 }
 
 // ===========================================================================
@@ -294,7 +302,7 @@ Problem floor_average_problem(z3::context&) {
         const expr& y = in[1];
         return out == ((x & y) + z3::lshr(x ^ y, 1));
     };
-    return Problem{2, library, spec};
+    return Problem{2, library, out1(spec)};
 }
 
 // ===========================================================================
@@ -308,7 +316,7 @@ Problem ceil_average_problem(z3::context&) {
         const expr& y = in[1];
         return out == ((x | y) - z3::lshr(x ^ y, 1));
     };
-    return Problem{2, library, spec};
+    return Problem{2, library, out1(spec)};
 }
 
 // ===========================================================================
@@ -322,7 +330,7 @@ Problem unsigned_max_problem(z3::context&) {
         const expr& y = in[1];
         return out == ite(z3::uge(x, y), x, y);
     };
-    return Problem{2, library, spec};
+    return Problem{2, library, out1(spec)};
 }
 
 // ===========================================================================
@@ -336,7 +344,7 @@ Problem turn_off_rightmost_contiguous_ones_problem(z3::context&) {
         const expr& x = in[0];
         return out == (((x | (x - 1)) + 1) & x);
     };
-    return Problem{1, library, spec};
+    return Problem{1, library, out1(spec)};
 }
 
 // ===========================================================================
@@ -350,7 +358,7 @@ Problem is_power_of_two_problem(z3::context&) {
         const expr cleared = (x - 1) & x;
         return out == as_bit(x, (cleared == lit(x, 0)) && (x != lit(x, 0)));
     };
-    return Problem{1, library, spec};
+    return Problem{1, library, out1(spec)};
 }
 
 // ===========================================================================
@@ -366,7 +374,7 @@ Problem exchange_register_fields_problem(z3::context&) {
         const expr t = (x ^ z3::lshr(x, k)) & m;
         return out == ((z3::shl(t, k) ^ t) ^ x);
     };
-    return Problem{3, library, spec};
+    return Problem{3, library, out1(spec)};
 }
 
 // ===========================================================================
@@ -382,7 +390,7 @@ Problem next_higher_same_popcount_problem(z3::context&) {
         const expr ones = z3::udiv(z3::lshr(x ^ ripple, 2), smallest);
         return out == (ripple | ones);
     };
-    return Problem{1, library, spec};
+    return Problem{1, library, out1(spec)};
 }
 
 // ===========================================================================
@@ -402,7 +410,7 @@ Problem cycle_three_values_problem(z3::context&) {
         const expr t = (is_c & (a ^ c)) ^ (is_a & (b ^ c));
         return out == (t ^ c);
     };
-    return Problem{4, library, spec};
+    return Problem{4, library, out1(spec)};
 }
 
 // ===========================================================================
@@ -451,7 +459,7 @@ Problem count_bits_problem(z3::context&) {
         const expr c = (b + z3::lshr(b, 4)) & m4;
         return out == c;
     };
-    return Problem{1, library, spec};
+    return Problem{1, library, out1(spec)};
 }
 
 // ===========================================================================
@@ -459,7 +467,7 @@ Problem count_bits_problem(z3::context&) {
 // down with shifts 1, 2, 4, ... < width, then increment.
 // ===========================================================================
 Problem round_up_to_power_of_two_problem(z3::context&) {
-    std::vector<ComponentSpec> library = {dec()};
+    std::vector<BitwiseComponentSpec> library = {dec()};
     for (unsigned s = 1; s < BV_LENGTH; s *= 2) {
         library.push_back(lshr_by(s));
         library.push_back(or_());
@@ -473,7 +481,7 @@ Problem round_up_to_power_of_two_problem(z3::context&) {
             v = v | z3::lshr(v, static_cast<int>(s));
         return out == (v + 1);
     };
-    return Problem{1, library, spec};
+    return Problem{1, library, out1(spec)};
 }
 
 // ===========================================================================
@@ -509,5 +517,63 @@ Problem high_half_of_product_problem(z3::context&) {
         const expr w = (x0 * y1) + (t & lo);
         return out == ((z3::lshr(w, h) + z3::lshr(t, h)) + (x1 * y1));
     };
-    return Problem{2, library, spec};
+    return Problem{2, library, out1(spec)};
+}
+
+// ===========================================================================
+// P26/P27: First-order masked AND / OR on Boolean shares (SecAnd / SecOr),
+// after Biryukov/Dinu/Le Corre/Udovenko, "Optimal First-Order Boolean Masking
+// for Embedded IoT Devices" (CARDIS 2017).  The inputs are the four shares
+// x1, x2, y1, y2 of the secrets x = x1^x2 and y = y1^y2; the two outputs are
+// shares z1, z2 with z1^z2 = x&y (resp. x|y).  No intermediate value may leak
+// information about the sensitive functions below, so the two output shares
+// are never combined and no fresh randomness is needed.
+// ===========================================================================
+namespace {
+
+// The paper's sensitive set K = {x, y, x&y, ~x&y, x&~y, ~x&~y}, as Boolean
+// functions of the input share bits (x1, x2, y1, y2).
+std::vector<std::function<bool(const std::vector<bool>&)>> share_pair_sensitive() {
+    const auto x = [](const std::vector<bool>& v) { return v[0] != v[1]; };
+    const auto y = [](const std::vector<bool>& v) { return v[2] != v[3]; };
+    return {
+        x,
+        y,
+        [=](const std::vector<bool>& v) { return x(v) && y(v); },
+        [=](const std::vector<bool>& v) { return !x(v) && y(v); },
+        [=](const std::vector<bool>& v) { return x(v) && !y(v); },
+        [=](const std::vector<bool>& v) { return !x(v) && !y(v); },
+    };
+}
+
+} // namespace
+
+Problem sec_and_problem(z3::context&) {
+    // The paper's optimal basic-ISA multiset: 7 operations.
+    std::vector library = {bnot(), and_(), and_(), or_(), or_(), xor_(), xor_()};
+
+    const auto spec = [](const expr_vector& in, const expr_vector& out) {
+        const expr x = in[0] ^ in[1];
+        const expr y = in[2] ^ in[3];
+        return (out[0] ^ out[1]) == (x & y);
+    };
+    Problem p{4, library, spec};
+    p.num_outputs = 2;
+    p.sensitive_fns = share_pair_sensitive();
+    return p;
+}
+
+Problem sec_or_problem(z3::context&) {
+    // The paper's optimal basic-ISA multiset: 6 operations.
+    std::vector library = {and_(), and_(), or_(), or_(), xor_(), xor_()};
+
+    const auto spec = [](const expr_vector& in, const expr_vector& out) {
+        const expr x = in[0] ^ in[1];
+        const expr y = in[2] ^ in[3];
+        return (out[0] ^ out[1]) == (x | y);
+    };
+    Problem p{4, library, spec};
+    p.num_outputs = 2;
+    p.sensitive_fns = share_pair_sensitive();
+    return p;
 }

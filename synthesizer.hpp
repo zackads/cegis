@@ -47,23 +47,28 @@ private:
     struct Locations {
         z3::expr_vector out_line;             // [N]          where each component is placed
         std::vector<z3::expr_vector> in_line; // [N][arity_n] where each parameter reads from
-        z3::expr output_line;                 //              where the program output reads from
+        z3::expr_vector output_lines;         // [num_outputs] where each program output reads from
     };
 
     Locations make_locations() const;
-    ProblemInstance instantiate(const std::string& tag);
+    // `width` is the bit-width of the fresh value variables: BV_LENGTH for
+    // ordinary evaluations, 2^num_inputs for the truth-table unfolding used by
+    // phi_secure().
+    ProblemInstance instantiate(const std::string& tag, unsigned width = BV_LENGTH);
 
     // Constraints
     z3::expr psi_wfp() const;                                 // a valid loop-free layout
     z3::expr phi_lib(const ProblemInstance&) const;           // correct semantics for each component
     z3::expr psi_conn(const ProblemInstance&) const;          // values agree wherever lines agree
     z3::expr phi_spec(const ProblemInstance&) const;          // the behavioural goal
+    z3::expr phi_secure();                                    // no intermediate leaks a sensitive function
 
     z3::expr_vector all_zero_example() const;
     std::string line_label(int line) const;
 
     z3::sort bv() const { return ctx_.bv_sort(BV_LENGTH); }
     unsigned num_inputs() const { return problem_.num_inputs; }
+    unsigned num_outputs() const { return problem_.num_outputs; }
     unsigned num_components() const { return static_cast<unsigned>(problem_.library.size()); }
 
     SynthesizedProgram decode(const z3::model&) const;

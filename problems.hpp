@@ -81,3 +81,11 @@ Problem round_up_to_power_of_two_problem(z3::context& ctx);
 
 // P25: Higher-order half of the product of x and y.
 Problem high_half_of_product_problem(z3::context& ctx);
+
+// P26: First-order masked AND on Boolean shares (SecAnd): given shares
+// x1, x2, y1, y2 of x and y, return shares z1, z2 with z1 ^ z2 == x & y such
+// that no intermediate value leaks information about x or y (CARDIS 2017).
+Problem sec_and_problem(z3::context& ctx);
+
+// P27: First-order masked OR on Boolean shares (SecOr), as P26 with x | y.
+Problem sec_or_problem(z3::context& ctx);

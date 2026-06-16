@@ -90,6 +90,8 @@ std::vector<Task> all_tasks() {
         {"P23 count bits", count_bits_problem},
         {"P24 round up to power of 2", round_up_to_power_of_two_problem},
         {"P25 high half of product", high_half_of_product_problem},
+        {"P26 SecAnd (first-order masked)", sec_and_problem},
+        {"P27 SecOr (first-order masked)", sec_or_problem},
     };
 }
 
@@ -120,7 +122,7 @@ std::string render_L(const SynthesizedProgram& p) {
     for (const SynthesizedProgram::Instruction& ins : p.instructions) {
         out += ins.result + " = " + ins.component + "(" + join(ins.args, ", ") + "); ";
     }
-    out += "return " + p.return_label;
+    out += "return " + join(p.return_labels, ", ");
     return out;
 }
 
@@ -152,7 +154,8 @@ private:
     unsigned core_;
 };
 
-unsigned parse_jobs(int argc, char** argv, unsigned hw, bool& help) {
+unsigned parse_jobs(int argc, char** argv, unsigned hw, bool& help,
+                    std::vector<std::string>& filters) {
     unsigned jobs = 1;
     auto to_uint = [](const std::string& s) -> unsigned {
         return static_cast<unsigned>(std::max(1L, std::strtol(s.c_str(), nullptr, 10)));
@@ -167,11 +170,23 @@ unsigned parse_jobs(int argc, char** argv, unsigned hw, bool& help) {
             jobs = to_uint(arg.substr(2));
         } else if (arg.rfind("--jobs=", 0) == 0) {
             jobs = to_uint(arg.substr(std::string("--jobs=").size()));
+        } else if (!arg.empty() && arg[0] != '-') {
+            filters.push_back(arg); // task-title prefix, e.g. "P26"
         } else {
             std::cerr << "ignoring unknown argument: " << arg << '\n';
         }
     }
     return std::clamp(jobs, 1u, std::max(1u, hw));
+}
+
+// Keep only the tasks whose title starts with one of the given prefixes.
+std::vector<Task> filter_tasks(std::vector<Task> tasks, const std::vector<std::string>& filters) {
+    if (filters.empty()) return tasks;
+    std::erase_if(tasks, [&](const Task& t) {
+        return std::ranges::none_of(
+            filters, [&](const std::string& f) { return t.title.rfind(f, 0) == 0; });
+    });
+    return tasks;
 }
 
 } // namespace
@@ -180,15 +195,22 @@ int main(int argc, char** argv) {
     const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
 
     bool help = false;
-    const unsigned jobs = parse_jobs(argc, argv, hw, help);
+    std::vector<std::string> filters;
+    const unsigned jobs = parse_jobs(argc, argv, hw, help, filters);
     if (help) {
-        std::cout << "usage: emofom [-j N | --jobs N]\n"
+        std::cout << "usage: emofom [-j N | --jobs N] [PROBLEM...]\n"
                   << "  -j, --jobs N   synthesise up to N problems in parallel, each pinned\n"
-                  << "                 to its own core (1.." << hw << " on this machine).\n";
+                  << "                 to its own core (1.." << hw << " on this machine).\n"
+                  << "  PROBLEM        only run tasks whose title starts with this prefix,\n"
+                  << "                 e.g. \"emofom P26 P27\".\n";
         return 0;
     }
 
-    std::vector<Task> tasks = all_tasks();
+    std::vector<Task> tasks = filter_tasks(all_tasks(), filters);
+    if (tasks.empty()) {
+        std::cerr << "no tasks match the given filters\n";
+        return 1;
+    }
     Logger logger;
     logger.log("Synthesising " + std::to_string(tasks.size()) + " problems with " +
                std::to_string(jobs) + " parallel job(s) on a machine with " +
