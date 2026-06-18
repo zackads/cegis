@@ -15,45 +15,11 @@
 #include "program_printer.hpp"
 #include "synthesizer.hpp"
 
-// ---------------------------------------------------------------------------
-// Core affinity.  The driver runs a fixed pool of worker threads, one per
-// requested job, and pins each to a distinct core.  Because there are exactly
-// `jobs` workers and each is bound to its own core, the problems running
-// concurrently are always on different cores.
-//
-//   * Linux: pthread_setaffinity_np gives a hard guarantee.
-//   * macOS: there is no public API to bind a thread to a specific core; the
-//     affinity-tag API is only a scheduling hint, so distinct cores are
-//     requested but not guaranteed.  pin_to_core reports which we got.
-// ---------------------------------------------------------------------------
-#if defined(__linux__)
-#include <pthread.h>
-#include <sched.h>
-static bool pin_to_core(unsigned core) {
-    cpu_set_t set;
-    CPU_ZERO(&set);
-    CPU_SET(core, &set);
-    return pthread_setaffinity_np(pthread_self(), sizeof(set), &set) == 0;
-}
-static constexpr bool kAffinityIsHard = true;
-#elif defined(__APPLE__)
-#include <mach/mach.h>
-#include <mach/thread_policy.h>
-#include <pthread.h>
-static bool pin_to_core(unsigned core) {
-    // A distinct non-zero tag asks the scheduler to keep this thread on a core
-    // separate from threads carrying other tags.  It is advisory only.
-    thread_affinity_policy_data_t policy = {static_cast<integer_t>(core) + 1};
-    thread_port_t mach_thread = pthread_mach_thread_np(pthread_self());
-    return thread_policy_set(mach_thread, THREAD_AFFINITY_POLICY,
-                             reinterpret_cast<thread_policy_t>(&policy),
-                             THREAD_AFFINITY_POLICY_COUNT) == KERN_SUCCESS;
-}
-static constexpr bool kAffinityIsHard = false;
-#else
-static bool pin_to_core(unsigned) { return false; }
-static constexpr bool kAffinityIsHard = false;
-#endif
+// The driver runs a fixed pool of worker threads, one per requested job, and
+// lets macOS schedule them.  There is no portable way to bind a thread to a
+// specific core (the mach affinity-tag API is only an advisory hint and is
+// unsupported on Apple Silicon), so each worker carries a `core` index purely
+// as a label for its log lines.
 
 namespace {
 
@@ -163,22 +129,14 @@ int main(int argc, char** argv) {
 
     std::atomic<std::size_t> next{0};
 
-    // Each worker pins itself to a distinct core, then pulls problems from the
-    // shared queue.  With `jobs` pinned workers, no two problems run on the same
-    // core at the same time.
+    // Each worker pulls problems from the shared queue until it is drained.
     auto worker = [&](unsigned core) {
-        const bool pinned = pin_to_core(core);
         for (;;) {
             const std::size_t i = next.fetch_add(1);
             if (i >= tasks.size()) break;
             const Task& task = tasks[i];
 
-            std::string start = "[core " + std::to_string(core) + "] starting " + task.title;
-            if (!pinned)
-                start += "  (warning: could not pin thread to core)";
-            else if (!kAffinityIsHard)
-                start += "  (core affinity is advisory on this OS)";
-            logger.log(start);
+            logger.log("[core " + std::to_string(core) + "] starting " + task.title);
 
             z3::context ctx; // a private context per thread: z3 contexts are independent
             Synthesizer synth(ctx, task.build(ctx));
