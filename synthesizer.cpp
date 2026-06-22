@@ -133,38 +133,54 @@ z3::expr Synthesizer::phi_spec(const ProblemInstance& inst) const {
     return problem_.spec(in, out);
 }
 
-// phi_secure: the first-order non-leakage condition from Biryukov et al. (2017).
+// phi_secure: the first-order (probing-model) non-leakage condition of Biryukov,
+// Dinu, Le Corre and Udovenko, "Optimal First-Order Boolean Masking for Embedded
+// IoT Devices" (CARDIS 2017).  It builds a single Z3 expression asserting that no
+// intermediate value the program computes leaks any secret.
 //
-// Construct a single z3 expression that says "no intermediate value computed by
-// any component in the program may be statistically correlated with any of the
-// sensitive functions."
+// --- Threat model (the masking setting the paper works in) --------------------
+// The program's M inputs are uniformly random *shares*.  A secret is never held
+// in the clear; it is recovered only by combining shares (e.g. a secret bit
+// x = x1 ^ x2 from two input shares x1, x2).  `problem_.sensitive_fns` are
+// exactly those secret-bearing Boolean functions of the shares that an attacker
+// must not learn.  In the first-order probing model the attacker may observe any
+// *one* intermediate value of the program.  The program is first-order secure iff
+// every intermediate value is statistically *independent* of every sensitive
+// function: seeing one wire tells the attacker nothing about any secret.
 //
-// *** REQUIRES EVERY COMPONENT TO BE BITWISE ***
-// A naive approach to encode this constraint would be, for each candidate program,
-// to create 2^M Z3 expressions, one for each row in a truth table on M inputs.
-// Then, since each component is bitwise, we can assert independence via the Hamming
-// weight formula on a single bit.  This approach involves creating 2^M *
+// --- Independence of two Boolean random variables -----------------------------
+// Take each input share as a uniform random bit, so the M shares range over all
+// 2^M assignments equiprobably.  An intermediate value is then a Boolean function
+// f of the shares, and a sensitive value a Boolean function k.  f and k are
+// independent iff their joint distribution factorises:
 //
-// Every component is required to be bitwise — the same Boolean function at
-// every bit position, at any width — so the program is unfolded *once* at
-// width 2^M on truth-table values: input j is pinned to the constant whose
-// bit i is bit j of i, which makes each component's output value the truth
-// table of the Boolean function it computes (bit i is its value on the input
-// assignment encoded by i).
+//     P(f=1 and k=1) = P(f=1) * P(k=1).
 //
-// A function f leaks about a sensitive function k iff HW(k&f)/HW(f) != HW(k&~f)/HW(~f).
-// We assert the cross-multiplied equality for every (component, k) pair.  Constant
-// f satisfies it vacuously.  Hamming weights are sums of single-bit extracts at
-// width W, chosen so the products (at most rows^2) cannot overflow, keeping the
-// whole condition inside QF_BV.
+// Counting over the 2^M equiprobable assignments, P(g=1) = HW(g) / 2^M, where
+// HW(g) is the number of assignments on which g is 1 (its truth table's Hamming
+// weight).  Clearing the 2^M denominators turns independence into one integer
+// identity over Hamming weights, which is what we assert per (intermediate, k):
+//
+//     HW(f & k) * 2^M  ==  HW(f) * HW(k).
+//
+// (A constant f satisfies this for free, as it must: it carries no information.)
+//
+// --- Evaluating f on every assignment at once (needs bitwise components) -------
+// Every component computes the *same* Boolean function at every bit position, at
+// any width, so we unfold the unknown program just *once* on bitvectors of width
+// 2^M in which bit i carries the value on assignment i.  Pinning input j to the
+// constant whose bit i is "bit j of i" makes each component's output bitvector
+// the full truth table of the Boolean function that component computes.  The
+// Hamming weights above are then plain popcounts of these width-2^M truth-table
+// bitvectors, so the whole condition stays in QF_BV and is built once, outside
+// the CEGIS loop (security needs no counterexamples, only correctness does).
 z3::expr Synthesizer::phi_secure() {
     const unsigned M = num_inputs();
-    const unsigned rows = 1u << M; // 2^M rows in a truth table on M inputs
-    const unsigned W = 2 * M + 2;  // bit-width for Hamming-weight arithmetic
+    const unsigned rows = 1u << M; // 2^M assignments = rows of a truth table on M inputs
+    const unsigned W = 2 * M + 2;  // width for HW arithmetic: big enough to hold rows*rows = 2^(2M)
 
-    // A width-`rows` constant whose bit i is table[i], built 64 bits at a time
-    // so tables wider than a machine word still work.
-    // Helper function to turn a 
+    // Pack a truth table (indexed by assignment) into a width-`rows` bitvector
+    // whose bit i is table[i], built 64 bits at a time so wide tables still work.
     const auto table_const = [&](const std::vector<bool>& table) {
         std::optional<z3::expr> v;
         for (unsigned lo = 0; lo < rows; lo += 64) {
@@ -178,55 +194,57 @@ z3::expr Synthesizer::phi_secure() {
         return *v;
     };
 
+    // HW(g): on how many of the 2^M assignments is the truth-table bitvector g
+    // equal to 1?  Summed at width W so the products below cannot overflow.
+    //
+    // Note that this is a bit vector, not an integer, to keep the theory (T in
+    // SMT) in bit vector land.  Producing an integer here would require Z3 to
+    // combine theories, which is inefficient.
+    const auto hamming_weight = [&](const z3::expr& g) {
+        z3::expr sum = ctx_.bv_val(0, W);
+        for (unsigned i = 0; i < rows; ++i)
+            sum = sum + z3::zext(g.extract(i, i), W - 1);
+        return sum;
+    };
+
+    // Truth table of a sensitive function over the same assignment ordering:
+    // assignment i -> its input bits -> the function's value.
+    const auto sensitive_table = [&](const auto& k_fn) {
+        std::vector<bool> table(rows);
+        for (unsigned i = 0; i < rows; ++i) {
+            std::vector<bool> bits(M);
+            for (unsigned j = 0; j < M; ++j)
+                bits[j] = (i >> j) & 1u; // bit j of assignment i
+            table[i] = k_fn(bits);
+        }
+        return table;
+    };
+
     z3::expr_vector c(ctx_);
 
-    // One unfolding of the unknown program over truth-table values.
+    // Unfold the unknown program once over all 2^M assignments, with input j set
+    // to the projection "bit j of the assignment".  Every component output is
+    // then the truth table of the Boolean function it computes.
     ProblemInstance inst = instantiate("s", rows);
     for (unsigned j = 0; j < M; ++j) {
-        std::vector<bool> projection(rows);
+        std::vector<bool> input_j(rows);
         for (unsigned i = 0; i < rows; ++i)
-            projection[i] = (i >> j) & 1u;
-        c.push_back(inst.inputs[j].value == table_const(projection));
+            input_j[i] = (i >> j) & 1u;
+        c.push_back(inst.inputs[j].value == table_const(input_j));
     }
     c.push_back(phi_lib(inst));
     c.push_back(psi_conn(inst));
 
-    // Construct the sensitive truth tables we want to avoid
-    std::vector<std::vector<bool>> k_tables;
-    for (const auto& k : problem_.sensitive_fns) {
-        std::vector<bool> table(rows);
-        for (unsigned i = 0; i < rows; ++i) {
-            // Unpack the truth table row i into its input bits
-            std::vector<bool> bits(M);
-            for (unsigned j = 0; j < M; ++j)
-                bits[j] = (i >> j) & 1u;
-            table[i] = k(bits);
-        }
-        k_tables.push_back(std::move(table));
-    }
+    const z3::expr rows_w = ctx_.bv_val(rows, W); // the 2^M factor
 
-    // HW of f restricted to the rows where `where` is true, as a width-W value.
-    const auto hw = [&](const z3::expr& f, const std::vector<bool>& where) {
-        z3::expr sum = ctx_.bv_val(0, W);
-        for (unsigned i = 0; i < rows; ++i)
-            if (where[i])
-                sum = sum + z3::zext(f.extract(i, i), W - 1);
-        return sum;
-    };
-    const std::vector<bool> everywhere(rows, true);
-
-    for (unsigned n = 0; n < num_components(); ++n) {
-        const z3::expr& f = inst.component_placements[n].out.value;
-        const z3::expr hw_f = hw(f, everywhere);
-
-        for (const std::vector<bool>& k : k_tables) {
-            unsigned hw_k = 0;
-            for (unsigned i = 0; i < rows; ++i)
-                if (k[i]) ++hw_k;
-            const z3::expr hw_kf = hw(f, k);
-            // HW(k&f) * HW(~f) == HW(k&~f) * HW(f)
-            c.push_back(hw_kf * (ctx_.bv_val(rows, W) - hw_f) ==
-                        (ctx_.bv_val(hw_k, W) - hw_kf) * hw_f);
+    // For every intermediate value f and every sensitive function k, require f
+    // and k to be independent: HW(f & k) * 2^M == HW(f) * HW(k).
+    for (const auto& k_fn : problem_.sensitive_fns) {
+        const z3::expr k = table_const(sensitive_table(k_fn));
+        const z3::expr hw_k = hamming_weight(k);
+        for (const BitwiseComponentPlacement& probing_point : inst.component_placements) {
+            const z3::expr& f = probing_point.out.value;
+            c.push_back(hamming_weight(f & k) * rows_w == hamming_weight(f) * hw_k);
         }
     }
     return z3::mk_and(c);
@@ -254,21 +272,28 @@ std::optional<SynthesizedProgram> Synthesizer::solve(SynthesisObserver* observer
         // === Finite synthesis (the exists): find a single program that meets the spec on every example gathered so far. ===
         z3::solver synth_solver(ctx_);
         synth_solver.add(psi_wfp());
-        if (secure)
-            synth_solver.add(*secure);
+
+        if (secure) synth_solver.add(*secure);
+
         for (unsigned s = 0; s < examples.size(); ++s) {
             ProblemInstance synth_example_instance = instantiate("e" + std::to_string(s)); // Create an instance of the program...
+
             for (unsigned j = 0; j < synth_example_instance.inputs.size(); ++j)
                 synth_solver.add(synth_example_instance.inputs[j].value == examples[s][j]); // ...and wire in the values from this example.
+
             synth_solver.add(phi_lib(synth_example_instance));
             synth_solver.add(psi_conn(synth_example_instance));
             synth_solver.add(phi_spec(synth_example_instance));
         }
+
         if (synth_solver.check() != z3::sat) {
             if (observer) observer->on_no_program();
+
             return std::nullopt;
         }
+
         z3::model candidate = synth_solver.get_model();
+
         if (observer) observer->on_candidate(decode(candidate));
 
         // === Verification (the forall): does some input make this candidate violate the spec?  Look for a counterexample. ===
